@@ -1,115 +1,101 @@
+import math
 import random
-import matplotlib.pyplot as plt
-from typing import List    
-from tictactoe import TicTacToe  
-def minimax(game, depth: int, maximizing: bool, k: int, explored_nodes: List[int]) -> float:
-    if game.is_terminal() or depth == k:
-        explored_nodes[0] += 1
-        if game.is_terminal():
-            return game.utility()
-        return game.heuristic()
+from typing import List, Optional, Tuple
+from tictactoe import *
 
-    if maximizing:
-        max_eval = float('-inf')
-        for move in game.legal_moves():
+class MCTSNode:
+    def __init__(self, state: TicTacToe, parent: Optional['MCTSNode'] = None, move: Optional[int] = None):
+        self.state = state
+        self.parent = parent
+        self.move = move
+        self.children: List[MCTSNode] = []
+        self.visits = 0
+        self.wins = 0.0
+        self.untried_moves = state.legal_moves()
+
+    def is_fully_expanded(self):
+        return len(self.untried_moves) == 0
+
+    def best_child(self, c_param=1.41):
+        choices_weights = [
+            (child.wins / child.visits) + c_param * math.sqrt(math.log(self.visits) / child.visits)
+            for child in self.children
+        ]
+        return self.children[choices_weights.index(max(choices_weights))]
+
+    def expand(self):
+        move = self.untried_moves.pop()
+        new_state = TicTacToe(self.state.current_player)
+        new_state.board = self.state.board[:]
+        new_state.make_move(move)
+        child_node = MCTSNode(new_state, parent=self, move=move)
+        self.children.append(child_node)
+        return child_node
+
+    def rollout(self):
+        rollout_state = TicTacToe(self.state.current_player)
+        rollout_state.board = self.state.board[:]
+        while not rollout_state.is_terminal():
+            move = random.choice(rollout_state.legal_moves())
+            rollout_state.make_move(move)
+        return rollout_state.utility()
+
+    def backpropagate(self, result: int):
+        self.visits += 1
+        self.wins += result
+        if self.parent:
+            self.parent.backpropagate(-result)
+
+def mcts(root: TicTacToe, iterations: int = 100) -> int:
+    root_node = MCTSNode(root)
+    for _ in range(iterations):
+        node = root_node
+        while node.is_fully_expanded() and node.children:
+            node = node.best_child()
+        if not node.is_fully_expanded():
+            node = node.expand()
+        result = node.rollout()
+        node.backpropagate(result)
+
+    best_move = max(root_node.children, key=lambda c: c.visits).move
+    return best_move
+
+
+def run_single_simulation(iterations: int, games: int = 100) -> Tuple[int, int, int, float]:
+    wins, draws, losses, total_nodes = 0, 0, 0, 0
+
+    for _ in range(games):
+        game = TicTacToe(starting_player='X')
+        node_count = 0
+
+        while not game.is_terminal():
+            move = mcts(game, iterations=iterations)
             game.make_move(move)
-            eval = minimax(game, depth + 1, False, k, explored_nodes)
-            game.undo_move(move)
-            max_eval = max(max_eval, eval)
-        return max_eval
-    else:
-        min_eval = float('inf')
-        for move in game.legal_moves():
-            game.make_move(move)
-            eval = minimax(game, depth + 1, True, k, explored_nodes)
-            game.undo_move(move)
-            min_eval = min(min_eval, eval)
-        return min_eval
+            node_count += 1
 
-def best_move(game, k: int) -> int:
-    best_score = float('-inf')
-    move_chosen = -1
-    explored_nodes = [0]
+        total_nodes += node_count
+        result = game.utility()
+        if result == 1:
+            wins += 1
+        elif result == 0:
+            draws += 1
+        else:
+            losses += 1
 
-    for move in game.legal_moves():
-        game.make_move(move)
-        score = minimax(game, 1, False, k, explored_nodes)
-        game.undo_move(move)
-        if score > best_score:
-            best_score = score
-            move_chosen = move
+    avg_nodes = total_nodes / games
+    return wins, draws, losses, avg_nodes
 
-    return move_chosen, explored_nodes[0]
 
-def simulate_multiple_depths(TicTacToeClass, ks: List[int], N: int = 200):
-    resultados = {
-        "k": [],
-        "Victorias": [],
-        "Derrotas": [],
-        "Empates": [],
-        "Promedio de nodos explorados": []
-    }
+def run_multiple_variants():
+    variants = [25, 50, 100, 200, 400, 800]
+    total_games = 1000
 
-    for k in ks:
-        wins = 0
-        losses = 0
-        draws = 0
-        total_nodes = 0
+    print(f"{'Iteraciones':>12} | {'Victorias':>9} | {'Empates':>7} | {'Derrotas':>9} | {'Nodos/juego':>12}")
+    print("-" * 60)
 
-        for _ in range(N):
-            game = TicTacToeClass(starting_player=random.choice(['X', 'O']))
-            while not game.is_terminal():
-                if game.current_player == 'X':
-                    move, nodes = best_move(game, k)
-                    total_nodes += nodes
-                else:
-                    move = random.choice(game.legal_moves())
-                game.make_move(move)
-
-            result = game.utility()
-            if result == 1:
-                wins += 1
-            elif result == -1:
-                losses += 1
-            else:
-                draws += 1
-
-        resultados["k"].append(k)
-        resultados["Victorias"].append(wins)
-        resultados["Derrotas"].append(losses)
-        resultados["Empates"].append(draws)
-        resultados["Promedio de nodos explorados"].append(total_nodes / N)
-
-    print("\nResultados promedio por profundidad:")
-    for i in range(len(ks)):
-        print(f"  k = {ks[i]}:")
-        print(f"    - Victorias esperadas: {resultados['Victorias'][i]}/{N}")
-        print(f"    - Empates esperados: {resultados['Empates'][i]}/{N}")
-        print(f"    - Derrotas esperadas: {resultados['Derrotas'][i]}/{N}")
-        print(f"    - Nodos promedio por subárbol: {resultados['Promedio de nodos explorados'][i]:.2f}\n")
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(resultados["k"], resultados["Victorias"], label="Victorias", marker='o')
-    plt.plot(resultados["k"], resultados["Empates"], label="Empates", marker='o')
-    plt.plot(resultados["k"], resultados["Derrotas"], label="Derrotas", marker='o')
-    plt.xlabel("Profundidad k")
-    plt.ylabel("Número de partidas")
-    plt.title(f"Resultados promedio en {N} partidas")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-    plt.figure(figsize=(10, 5))
-    plt.plot(resultados["k"], resultados["Promedio de nodos explorados"], label="Nodos Explorados", marker='s')
-    plt.xlabel("Profundidad k")
-    plt.ylabel("Promedio de nodos explorados por partida")
-    plt.title(f"Complejidad computacional vs. Profundidad")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-    return resultados
+    for iters in variants:
+        wins, draws, losses, avg_nodes = run_single_simulation(iters, games=total_games)
+        print(f"{iters:>12} | {wins:>9} | {draws:>7} | {losses:>9} | {avg_nodes:>12.2f}")
 
 if __name__ == "__main__":
-    simulate_multiple_depths(TicTacToeClass=TicTacToe, ks=[1, 2, 3, 4, 5], N=20)
+    run_multiple_variants()
